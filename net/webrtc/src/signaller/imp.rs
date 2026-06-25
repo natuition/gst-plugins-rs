@@ -103,17 +103,8 @@ impl Signaller {
             Ok::<(), Error>(())
         });
 
-        let meta = if let Some(meta) = element.property::<Option<gst::Structure>>("meta") {
-            serialize_value(&meta.to_value())
-        } else {
-            None
-        };
         websocket_sender
-            .send(p::IncomingMessage::SetPeerStatus(p::PeerStatus {
-                roles: vec![p::PeerRole::Producer],
-                meta,
-                peer_id: None,
-            }))
+            .send(Self::producer_status_message(element, Some(element.current_state())))
             .await?;
 
         let element_clone = element.downgrade();
@@ -257,6 +248,59 @@ impl Signaller {
                 element_clone.handle_signalling_error(err.into());
             }
         });
+    }
+
+    fn producer_status_message(
+        element: &WebRTCSink,
+        gst_state: Option<gst::State>,
+    ) -> p::IncomingMessage {
+        let mut meta = if let Some(meta) = element.property::<Option<gst::Structure>>("meta") {
+            serialize_value(&meta.to_value()).unwrap_or_else(|| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+
+        if let Some(gst_state) = gst_state {
+            if !meta.is_object() {
+                meta = serde_json::json!({ "producer-meta": meta });
+            }
+
+            if let Some(meta_obj) = meta.as_object_mut() {
+                meta_obj.insert(
+                    "gst-state".to_string(),
+                    serde_json::Value::String(gstreamer_state_to_str(gst_state).to_string()),
+                );
+            }
+        }
+
+        p::IncomingMessage::SetPeerStatus(p::PeerStatus {
+            roles: vec![p::PeerRole::Producer],
+            meta: Some(meta),
+            peer_id: None,
+        })
+    }
+
+    pub fn state_changed(&self, element: &WebRTCSink, gst_state: gst::State) {
+        gst::info!(
+            CAT,
+            obj: element,
+            "GStreamer state changed to {}, notifying signalling server",
+            gstreamer_state_to_str(gst_state)
+        );
+
+        let state = self.state.lock().unwrap();
+        let msg = Self::producer_status_message(element, Some(gst_state));
+
+        if let Some(mut sender) = state.websocket_sender.clone() {
+            let element = element.downgrade();
+            RUNTIME.spawn(async move {
+                if let Err(err) = sender.send(msg).await {
+                    if let Some(element) = element.upgrade() {
+                        element.handle_signalling_error(anyhow!("Error: {}", err).into());
+                    }
+                }
+            });
+        }
     }
 
     pub fn handle_sdp(
@@ -438,6 +482,17 @@ impl ObjectImpl for Signaller {
             }
             _ => unimplemented!(),
         }
+    }
+}
+
+fn gstreamer_state_to_str(state: gst::State) -> &'static str {
+    match state {
+        gst::State::VoidPending => "void-pending",
+        gst::State::Null => "null",
+        gst::State::Ready => "ready",
+        gst::State::Paused => "paused",
+        gst::State::Playing => "playing",
+        _ => "unknown",
     }
 }
 

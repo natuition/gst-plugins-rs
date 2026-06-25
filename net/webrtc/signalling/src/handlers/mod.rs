@@ -219,6 +219,42 @@ impl Handler {
         Ok(())
     }
 
+    fn notify_peer_status_changed(
+        &mut self,
+        peer_id: &str,
+        status: &p::PeerStatus,
+    ) -> Result<(), Error> {
+        let message = p::OutgoingMessage::PeerStatusChanged(p::PeerStatus {
+            peer_id: Some(peer_id.to_string()),
+            roles: status.roles.clone(),
+            meta: status.meta.clone(),
+        });
+
+        let mut notified = HashSet::new();
+
+        // Keep the existing behaviour: notify all listeners.
+        for (id, peer) in &self.peers {
+            if peer.listening() {
+                notified.insert(id.to_string());
+                self.items.push_back((id.to_string(), message.clone()));
+            }
+        }
+
+        // Also notify all consumers currently connected to this producer.
+        if let Some(session_ids) = self.producer_sessions.get(peer_id) {
+            for session_id in session_ids {
+                if let Some(session) = self.sessions.get(session_id) {
+                    if notified.insert(session.consumer.clone()) {
+                        self.items
+                            .push_back((session.consumer.clone(), message.clone()));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Register peer as a producer
     #[instrument(level = "debug", skip(self))]
     fn set_peer_status(&mut self, peer_id: &str, status: &p::PeerStatus) -> Result<(), Error> {
@@ -240,20 +276,8 @@ impl Handler {
         let mut status = status.clone();
         status.peer_id = Some(peer_id.to_string());
         self.peers.insert(peer_id.to_string(), status.clone());
-        for (id, peer) in &self.peers {
-            if !peer.listening() {
-                continue;
-            }
 
-            self.items.push_back((
-                id.to_string(),
-                p::OutgoingMessage::PeerStatusChanged(p::PeerStatus {
-                    peer_id: Some(peer_id.to_string()),
-                    roles: status.roles.clone(),
-                    meta: status.meta.clone(),
-                }),
-            ));
-        }
+        self.notify_peer_status_changed(peer_id, &status)?;
 
         info!(peer_id = %peer_id, "registered as a producer");
 

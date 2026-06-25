@@ -55,6 +55,11 @@ impl Signallable for Signaller {
         let signaller = self.imp();
         signaller.end_session(element, session_id);
     }
+
+    fn state_changed(&mut self, element: &WebRTCSink, state: gst::State) {
+        let signaller = self.imp();
+        signaller.state_changed(element, state);
+    }
 }
 
 impl Default for Signaller {

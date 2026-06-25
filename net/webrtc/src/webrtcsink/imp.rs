@@ -942,6 +942,12 @@ impl State {
             gst::info!(CAT, "Stopped signaller");
         }
     }
+
+    fn notify_gstreamer_state(&mut self, element: &super::WebRTCSink, gst_state: gst::State) {
+        if self.signaller_state == SignallerState::Started {
+            self.signaller.state_changed(element, gst_state);
+        }
+    }
 }
 
 impl Session {
@@ -3090,6 +3096,11 @@ impl ElementImpl for WebRTCSink {
             gst::StateChange::PausedToPlaying => {
                 let mut state = self.state.lock().unwrap();
                 state.maybe_start_signaller(&element);
+                state.notify_gstreamer_state(&element, gst::State::Playing);
+            }
+            gst::StateChange::PlayingToPaused => {
+                let mut state = self.state.lock().unwrap();
+                state.notify_gstreamer_state(&element, gst::State::Paused);
             }
             _ => (),
         }
