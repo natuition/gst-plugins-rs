@@ -224,29 +224,37 @@ impl Handler {
         peer_id: &str,
         status: &p::PeerStatus,
     ) -> Result<(), Error> {
-        let message = p::OutgoingMessage::PeerStatusChanged(p::PeerStatus {
-            peer_id: Some(peer_id.to_string()),
-            roles: status.roles.clone(),
-            meta: status.meta.clone(),
-        });
-
         let mut notified = HashSet::new();
 
-        // Keep the existing behaviour: notify all listeners.
+        // 1. Notify listeners
         for (id, peer) in &self.peers {
             if peer.listening() {
                 notified.insert(id.to_string());
-                self.items.push_back((id.to_string(), message.clone()));
+
+                self.items.push_back((
+                    id.to_string(),
+                    p::OutgoingMessage::PeerStatusChanged(p::PeerStatus {
+                        peer_id: Some(peer_id.to_string()),
+                        roles: status.roles.clone(),
+                        meta: status.meta.clone(),
+                    }),
+                ));
             }
         }
 
-        // Also notify all consumers currently connected to this producer.
+        // 2. If the peer is a producer, also notify its consumers in the session.
         if let Some(session_ids) = self.producer_sessions.get(peer_id) {
             for session_id in session_ids {
                 if let Some(session) = self.sessions.get(session_id) {
                     if notified.insert(session.consumer.clone()) {
-                        self.items
-                            .push_back((session.consumer.clone(), message.clone()));
+                        self.items.push_back((
+                            session.consumer.clone(),
+                            p::OutgoingMessage::PeerStatusChanged(p::PeerStatus {
+                                peer_id: Some(peer_id.to_string()),
+                                roles: status.roles.clone(),
+                                meta: status.meta.clone(),
+                            }),
+                        ));
                     }
                 }
             }

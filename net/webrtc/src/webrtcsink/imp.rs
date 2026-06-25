@@ -2337,7 +2337,19 @@ impl WebRTCSink {
                     return Err(err.error().into());
                 }
                 gst::MessageView::Eos(_) => {
-                    let caps = pay.static_pad("src").unwrap().current_caps().unwrap();
+                    let caps = match pay.static_pad("src").and_then(|pad| pad.current_caps()) {
+                        Some(caps) => caps,
+                        None => {
+                            pipe.0.debug_to_dot_file_with_ts(
+                                gst::DebugGraphDetails::all(),
+                                "webrtcsink-discovery-no-caps",
+                            );
+
+                            return Err(anyhow!(
+                                "Discovery pipeline reached EOS without negotiated caps for input caps {in_caps} and codec {codec:?}"
+                            ));
+                        }
+                    };
 
                     pipe.0.debug_to_dot_file_with_ts(
                         gst::DebugGraphDetails::all(),
@@ -2354,11 +2366,13 @@ impl WebRTCSink {
                             "a-framerate",
                         ]);
                         s.set("payload", codec.payload);
+
                         gst::debug!(
                             CAT,
                             obj: element,
                             "Codec discovery pipeline for caps {in_caps} with codec {codec:?} succeeded: {s}"
                         );
+
                         return Ok(s);
                     } else {
                         return Err(anyhow!("Discovered empty caps"));
