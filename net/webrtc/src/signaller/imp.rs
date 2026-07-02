@@ -57,6 +57,8 @@ impl Signaller {
     async fn connect(&self, element: &WebRTCSink) -> Result<(), Error> {
         let settings = self.settings.lock().unwrap().clone();
 
+        gst::debug!(CAT, imp: self,"Connecting to signalling server at {:?}", settings.address);
+
         let connector = if let Some(path) = settings.cafile {
             let cert = tokio::fs::read_to_string(&path).await?;
             let cert = tokio_native_tls::native_tls::Certificate::from_pem(cert.as_bytes())?;
@@ -108,6 +110,9 @@ impl Signaller {
         } else {
             None
         };
+
+        gst::debug!(CAT, imp: self,"Sending peer status with meta: {:?}", meta);
+
         websocket_sender
             .send(p::IncomingMessage::SetPeerStatus(p::PeerStatus {
                 roles: vec![p::PeerRole::Producer],

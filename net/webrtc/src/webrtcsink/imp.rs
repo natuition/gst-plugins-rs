@@ -27,7 +27,7 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
         "webrtcsink",
         gst::DebugColorFlags::empty(),
-        Some("WebRTC sink"),
+        Some("WebRTC sink implementation"),
     )
 });
 
@@ -245,6 +245,7 @@ struct NavigationEvent {
 /* Our internal state */
 struct State {
     signaller: Box<dyn super::SignallableObject>,
+    // prepared: bool,
     signaller_state: SignallerState,
     sessions: HashMap<String, Session>,
     codecs: BTreeMap<i32, Codec>,
@@ -1567,6 +1568,9 @@ impl WebRTCSink {
     ) -> Result<(), WebRTCSinkError> {
         let settings = self.settings.lock().unwrap();
         let mut state = self.state.lock().unwrap();
+        gst::debug!(CAT, obj: element, "Starting session {} for peer {}", session_id, peer_id);
+        gst::debug!(CAT, obj: element, "Current gst state: {:?}", element.current_state());
+
         let peer_id = peer_id.to_string();
         let session_id = session_id.to_string();
 
@@ -2718,6 +2722,7 @@ impl ObjectImpl for WebRTCSink {
                     value.get::<bool>().expect("type checked upstream");
             }
             "meta" => {
+                gst::debug!(CAT, imp: self, "Setting meta to {:?}", value);
                 let mut settings = self.settings.lock().unwrap();
                 settings.meta = value
                     .get::<Option<gst::Structure>>()
@@ -3055,6 +3060,7 @@ impl ElementImpl for WebRTCSink {
 
         match transition {
             gst::StateChange::PausedToReady => {
+                gst::debug!(CAT, obj: element, "State change PausedToReady");
                 let unprepare_res = match tokio::runtime::Handle::try_current() {
                     Ok(_) => {
                         gst::error!(
@@ -3085,11 +3091,22 @@ impl ElementImpl for WebRTCSink {
                 }
             }
             gst::StateChange::ReadyToPaused => {
+                gst::debug!(CAT, obj: element, "State change ReadyToPaused");
                 ret = Ok(gst::StateChangeSuccess::NoPreroll);
             }
             gst::StateChange::PausedToPlaying => {
+                gst::debug!(CAT, obj: element, "State change PausedToPlaying.");
                 let mut state = self.state.lock().unwrap();
                 state.maybe_start_signaller(&element);
+            }
+            gst::StateChange::ReadyToNull => {
+                gst::debug!(CAT, obj: element, "State change ReadyToNull.");
+            }
+            gst::StateChange::NullToReady => {
+                gst::debug!(CAT, obj: element, "State change NullToReady.");
+            }
+            gst::StateChange::PlayingToPaused => {
+                gst::debug!(CAT, obj: element, "State change PlayingToPaused.");
             }
             _ => (),
         }

@@ -10,6 +10,15 @@ use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
 use std::error::Error;
+use once_cell::sync::Lazy;
+
+static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
+    gst::DebugCategory::new(
+        "webrtcsink",
+        gst::DebugColorFlags::empty(),
+        Some("WebRTC sink module"),
+    )
+});
 
 mod homegrown_cc;
 mod imp;
@@ -90,6 +99,9 @@ impl WebRTCSink {
         let ret = glib::Object::new::<WebRTCSink>();
 
         let ws = ret.imp();
+
+        gst::debug!(CAT, obj: &ret, "Setting signaller.");
+
         ws.set_signaller(signaller).unwrap();
 
         ret
@@ -101,6 +113,7 @@ impl WebRTCSink {
         sdp: &gst_webrtc::WebRTCSessionDescription,
     ) -> Result<(), WebRTCSinkError> {
         let ws = self.imp();
+        gst::debug!(CAT, obj: self, "Handling SDP for session {}: {:?}", session_id, sdp);
         ws.handle_sdp(self, session_id, sdp)
     }
 
@@ -115,6 +128,9 @@ impl WebRTCSink {
         candidate: &str,
     ) -> Result<(), WebRTCSinkError> {
         let ws = self.imp();
+        gst::debug!(CAT, obj: self, "Handling ICE for session {}: mline_index={:?}, mid={:?}, candidate={}",
+            session_id, sdp_m_line_index, sdp_mid, candidate
+        );
         ws.handle_ice(self, session_id, sdp_m_line_index, sdp_mid, candidate)
     }
 
