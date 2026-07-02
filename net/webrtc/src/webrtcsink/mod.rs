@@ -66,6 +66,13 @@ pub trait Signallable: Sync + Send + 'static {
 
     fn session_ended(&mut self, element: &WebRTCSink, session_id: &str);
 
+    /// Called when the owning GStreamer element changes state.
+    /// Default implementation keeps existing custom signallers compatible.
+    fn state_changed(&mut self, element: &WebRTCSink, state: gst::State) {
+        let _ = element;
+        let _ = state;
+    }
+
     fn stop(&mut self, element: &WebRTCSink);
 }
 

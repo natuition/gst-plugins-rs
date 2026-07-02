@@ -246,6 +246,8 @@ struct NavigationEvent {
 struct State {
     signaller: Box<dyn super::SignallableObject>,
     signaller_state: SignallerState,
+    signaller_reconnect_pending: bool,
+    signaller_reconnect_attempt: u32,
     sessions: HashMap<String, Session>,
     codecs: BTreeMap<i32, Codec>,
     /// Used to abort codec discovery
@@ -364,6 +366,8 @@ impl Default for State {
         Self {
             signaller: Box::new(signaller),
             signaller_state: SignallerState::Stopped,
+            signaller_reconnect_pending: false,
+            signaller_reconnect_attempt: 0,
             sessions: HashMap::new(),
             codecs: BTreeMap::new(),
             codecs_abort_handle: None,
@@ -931,6 +935,8 @@ impl State {
             } else {
                 gst::info!(CAT, "Started signaller");
                 self.signaller_state = SignallerState::Started;
+                self.signaller_reconnect_pending = false;
+                self.signaller_reconnect_attempt = 0;
             }
         }
     }
@@ -939,7 +945,15 @@ impl State {
         if self.signaller_state == SignallerState::Started {
             self.signaller.stop(element);
             self.signaller_state = SignallerState::Stopped;
+            self.signaller_reconnect_pending = false;
+            self.signaller_reconnect_attempt = 0;
             gst::info!(CAT, "Stopped signaller");
+        }
+    }
+
+    fn notify_gstreamer_state(&mut self, element: &super::WebRTCSink, gst_state: gst::State) {
+        if self.signaller_state == SignallerState::Started {
+            self.signaller.state_changed(element, gst_state);
         }
     }
 }
@@ -1427,12 +1441,31 @@ impl WebRTCSink {
 
     /// Called by the signaller when it has encountered an error
     pub fn handle_signalling_error(&self, element: &super::WebRTCSink, error: anyhow::Error) {
-        gst::error!(CAT, obj: element, "Signalling error: {:?}", error);
+        let is_transient_disconnect = error.chain().any(|cause| {
+            let cause = cause.to_string();
+
+            cause.contains("Connection reset without closing handshake")
+                || cause.contains("Connection reset by peer")
+                || cause.contains("Broken pipe")
+                || cause.contains("connection closed")
+        });
+
+        if is_transient_disconnect {
+            gst::warning!(
+                CAT,
+                obj: element,
+                "Transient signalling transport error (pipeline kept alive): {:#}",
+                error
+            );
+            return;
+        }
+
+        gst::error!(CAT, obj: element, "Signalling error: {:#}", error);
 
         gst::element_error!(
             element,
             gst::StreamError::Failed,
-            ["Signalling error: {:?}", error]
+            ["Signalling error: {:#}", error]
         );
     }
 
@@ -2331,7 +2364,19 @@ impl WebRTCSink {
                     return Err(err.error().into());
                 }
                 gst::MessageView::Eos(_) => {
-                    let caps = pay.static_pad("src").unwrap().current_caps().unwrap();
+                    let caps = match pay.static_pad("src").and_then(|pad| pad.current_caps()) {
+                        Some(caps) => caps,
+                        None => {
+                            pipe.0.debug_to_dot_file_with_ts(
+                                gst::DebugGraphDetails::all(),
+                                "webrtcsink-discovery-no-caps",
+                            );
+
+                            return Err(anyhow!(
+                                "Discovery pipeline reached EOS without negotiated caps for input caps {in_caps} and codec {codec:?}"
+                            ));
+                        }
+                    };
 
                     pipe.0.debug_to_dot_file_with_ts(
                         gst::DebugGraphDetails::all(),
@@ -2348,11 +2393,13 @@ impl WebRTCSink {
                             "a-framerate",
                         ]);
                         s.set("payload", codec.payload);
+
                         gst::debug!(
                             CAT,
                             obj: element,
                             "Codec discovery pipeline for caps {in_caps} with codec {codec:?} succeeded: {s}"
                         );
+
                         return Ok(s);
                     } else {
                         return Err(anyhow!("Discovered empty caps"));
@@ -3090,6 +3137,11 @@ impl ElementImpl for WebRTCSink {
             gst::StateChange::PausedToPlaying => {
                 let mut state = self.state.lock().unwrap();
                 state.maybe_start_signaller(&element);
+                state.notify_gstreamer_state(&element, gst::State::Playing);
+            }
+            gst::StateChange::PlayingToPaused => {
+                let mut state = self.state.lock().unwrap();
+                state.notify_gstreamer_state(&element, gst::State::Paused);
             }
             _ => (),
         }
